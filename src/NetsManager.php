@@ -9,6 +9,7 @@ use Drupal\commerce_nets\Nets\CommerceNetsProcessRequest;
 use Drupal\commerce_nets\Nets\CommerceNetsQueryRequest;
 use Drupal\commerce_nets\Nets\CommerceNetsRegisterRequest;
 use Drupal\commerce_nets\Nets\CommerceNetsTerminal;
+use Drupal\commerce_nets\Nets\AvtaleGiro;
 use Drupal\commerce_payment\Entity\Payment;
 use Drupal\commerce_payment\Entity\PaymentInterface;
 use Drupal\commerce_price\Price;
@@ -23,8 +24,14 @@ class NetsManager implements NetsManagerInterface {
 
   const WDSL_TEST = 'https://test.epayment.nets.eu/netaxept.svc?wsdl';
   const WDSL_LIVE = 'https://epayment.nets.eu/netaxept.svc?wsdl';
-  const TERMINAL_TEST = 'https://test.epayment.nets.eu/Terminal/default.aspx';
-  const TERMINAL_LIVE = 'https://epayment.nets.eu/Terminal/default.aspx';
+
+  // Invoice endpoints
+  const ENDPOINT_AVTALE_GIRO_REGISTER_TEST = 'https://pvu-test.nets.no/pvutest/atgtest.do';
+  const ENDPOINT_AVTALE_GIRO_REGISTER_LIVE = 'https://epayment.nets.eu/Netaxept/Register.aspx';
+
+  // Payments endpoints
+  const TERMINAL_TEST_CREDIT_CARD         = 'https://test.epayment.nets.eu/Terminal/default.aspx';
+  const TERMINAL_LIVE_CREDIT_CARD         = 'https://epayment.nets.eu/Terminal/default.aspx';
 
   /**
    * Commerce nets logger.
@@ -47,8 +54,14 @@ class NetsManager implements NetsManagerInterface {
    */
   protected $eventDispatcher;
 
+  protected $payment_method;
+
   /**
    * Constructs a new NetsService object.
+   *
+   * @param \Psr\Log\LoggerInterface                                        $logger
+   * @param \Drupal\Core\Utility\Token                                      $token
+   * @param \Drupal\Component\EventDispatcher\ContainerAwareEventDispatcher $eventDispatcher
    */
   public function __construct(LoggerInterface $logger, Token $token, ContainerAwareEventDispatcher $eventDispatcher) {
     $this->logger = $logger;
@@ -92,7 +105,13 @@ class NetsManager implements NetsManagerInterface {
     /** @var \Drupal\commerce_payment\Plugin\Commerce\PaymentGateway\OffsitePaymentGatewayInterface $payment_gateway_plugin */
     $payment_gateway_plugin = $payment->getPaymentGateway()->getPlugin();
     $payment_settings = $payment_gateway_plugin->getConfiguration();
+
+    // Verify payment method
+    $order = $payment->getOrder();
+    $this->payment_method = $order->get('field_payment_method')->value;
+
     $wsdl = $this->wsdlUrl($payment_settings['mode']);
+
     $client = $this->initClient($wsdl);
 
     // Parameters in Order.
@@ -187,15 +206,13 @@ class NetsManager implements NetsManagerInterface {
       $customer_town
     );
 
-    $recurring = NULL;
-
     // Parameters in Register Request.
     $nets_avtale_giro = NULL;
     $nets_card_info = NULL;
     $nets_description = NULL;
     $nets_dnbnor_direct_payment = NULL;
     $nets_micro_payment = NULL;
-    $nets_recurring = $recurring;
+    $nets_recurring = NULL;
     $nets_service_type = NULL;
 
     // By default, let nets create a Transaction ID for us.
@@ -256,6 +273,7 @@ class NetsManager implements NetsManagerInterface {
    *
    * @return \SoapClient
    *   Ssssoap client.
+   * @throws \SoapFault
    */
   public function initClient($wsdl) {
     $client = new \SoapClient($wsdl, array(
@@ -284,11 +302,13 @@ class NetsManager implements NetsManagerInterface {
    * @param string $environment
    *   Either test or live indicating which environment to get the URL for.
    *
+   * @param string $payment_method
+   *
    * @return string
    *   The URL to use to submit requests to the Nets server.
    */
   public function terminalUrl($environment) {
-    return $environment == 'live' ? self::TERMINAL_LIVE : self::TERMINAL_TEST;
+    return $environment == 'live' ? self::TERMINAL_LIVE_CREDIT_CARD : self::TERMINAL_TEST_CREDIT_CARD;
   }
 
   /**
@@ -392,7 +412,6 @@ class NetsManager implements NetsManagerInterface {
    * @throws \Exception
    */
   public function processTransaction(PaymentInterface $payment, $action, $amount = NULL) {
-
     $settings = $payment->getPaymentGateway()->getPluginConfiguration();
     $wsdl = $this->wsdlUrl($settings['mode']);
     $client = $this->initClient($wsdl);
@@ -446,4 +465,110 @@ class NetsManager implements NetsManagerInterface {
     return TRUE;
   }
 
+  /**
+   * Performs a transaction Register at Nets for invoice method.
+   *
+   * @param \Drupal\commerce_payment\Entity\Payment $payment
+   *   Payment method instance for the order.
+   * @param \Drupal\commerce_price\Price $charge
+   *   Charge array with amount and currency_code.
+   * @param array $urls
+   *   An array of URLs with keys 'return' and 'cancel'.
+   *
+   * @return string
+   *   Transaction ID.
+   *
+   * @throws \Exception
+   *   In case of unsuccessful registration exception will be thrown.
+   */
+  public function registerTransactionInvoice(Payment $payment, Price $charge, array $urls) {
+    /** @var \Drupal\commerce_payment\Plugin\Commerce\PaymentGateway\OffsitePaymentGatewayInterface $payment_gateway_plugin */
+    $payment_gateway_plugin = $payment->getPaymentGateway()->getPlugin();
+    $payment_settings = $payment_gateway_plugin->getConfiguration();
+
+    // Verify payment method
+    $order = $payment->getOrder();
+    $this->payment_method = $order->get('field_payment_method')->value;
+
+    // Build the endpoint connection
+    $endpoint = $this->invoiceEndpoint($payment_settings['mode'], 'register');
+
+    //Build KID
+    $kid = $this->buildKidNumber($order->id());
+
+    $endpoint.=
+      '?merchantId=' . $payment_settings['merchantid'] .
+      '&url=' . $urls['return'] .
+      '&account=' . $payment_settings['accountnumber'] .
+      '&kid=' . $kid .
+      '&name=' . $payment_settings['companyname'] .
+      '&limit=' . str_replace(' NOK', '', $payment->getAmount()->__toString()) * 100;
+    return $endpoint;
+  }
+
+  /**
+   * Returns the URL to the specified Nets Endpoint server for invoice.
+   *
+   * @param string $environment
+   *   Either test or live indicating which environment to get the URL for.
+   *
+   * @param        $operation_type
+   *   If it is a register, process, query, terminal operation
+   *
+   * @return string
+   *   The URL to use to submit requests to the Nets server.
+   */
+  public function invoiceEndpoint($environment, $operation_type) {
+    // Get The type of operation
+    switch ($operation_type) {
+      case 'register':
+        $url = $environment == 'live' ? self::ENDPOINT_AVTALE_GIRO_REGISTER_LIVE : self::ENDPOINT_AVTALE_GIRO_REGISTER_TEST;
+        break;
+      //case 'query':
+      //  $url = $environment == 'live' ? self::QUERY_LIVE_AVTALE_GIRO : self::QUERY_TEST_AVTALE_GIRO;
+      //  break;
+      default:
+        $url = $environment == 'live' ? self::WDSL_LIVE : self::WDSL_TEST;
+        break;
+    }
+
+    return $url;
+  }
+
+  /**
+   * @param $order_id
+   *
+   * @return string kid with 20 numbers
+   */
+  private function buildKidNumber($order_id) {
+    // Order id is a 8 number length
+    while(strlen($order_id) < 8) {
+      $order_id = '0' . $order_id;
+    }
+
+    $count = 0;
+    $sum = 0;
+
+    for($i = strlen($order_id) - 1; $i >= 0; $i--) {
+      // First multiply the Weighting
+      // First char from right we wont to multiply by 2. First $i is 7, so it's even
+      if($i % 2 == 0) {
+        $count .= $order_id[$i] * 1;
+      } else {
+        $count .= $order_id[$i] * 2;
+      }
+    }
+
+    //Then sum each char (Not number!!!)
+    for($i = 0; $i < strlen($count); $i++) {
+      $sum += $count[$i];
+    }
+
+    // Get the last char of sum
+    $kid = substr($sum, -1);
+    // If the single digit from sum is 0, the control digit will be 0
+    $kid = $kid == 0 ? 0 : 10 - $kid;
+
+    return '0000000' . $order_id . '0000' . $kid;
+  }
 }

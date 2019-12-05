@@ -78,6 +78,13 @@ class NetsCheckoutForm extends BasePaymentOffsiteForm implements ContainerInject
     $payment_gateway_plugin = $payment->getPaymentGateway()->getPlugin();
     $payment_gateway_settings = $payment_gateway_plugin->getConfiguration();
 
+    // Verify payment method
+    $order = $payment->getOrder();
+    $payment_method = $order->get('field_payment_method')->value;
+
+    $merchant_id = $payment_gateway_settings['merchantid'];
+    $account_number = $payment_gateway_settings['accountnumber'];
+
     $use_redirect = TRUE;
 
     $urls = [
@@ -85,37 +92,52 @@ class NetsCheckoutForm extends BasePaymentOffsiteForm implements ContainerInject
       'cancel' => $form['#cancel_url'],
     ];
 
-    try {
+    if($payment_method === 'avtale_giro_bank_id') {
       // Create a local transaction for the register event.
-      $transaction_id = $this->nets->registerTransaction(
+      $terminal_url = $this->nets->registerTransactionInvoice(
         $payment,
         $payment->getAmount(),
         $urls
       );
 
-    }
-    catch (\Exception $e) {
-      $this->logger->error('Could not register new transaction for order @order_id.', array('@order_id' => $payment->getOrderId()));
-      // If $use_redirect is set we are allow to throw an exception.
-      if ($use_redirect) {
-        throw new PaymentGatewayException('Could not register transaction. Please try again.');
+      $options = [
+        'merchantid' => $merchant_id,
+        'account_number' => $account_number,
+      ];
+
+    } else {
+      try {
+        // Create a local transaction for the register event.
+        $transaction_id = $this->nets->registerTransaction(
+          $payment,
+          $payment->getAmount(),
+          $urls
+        );
+      } catch(\Exception $e) {
+        $this->logger->error('Could not register new transaction for order @order_id.', ['@order_id' => $payment->getOrderId()]);
+        // If $use_redirect is set we are allow to throw an exception.
+        if ($use_redirect) {
+          throw new PaymentGatewayException('Could not register transaction. Please try again.');
+        }
+        return $this->buildReturnUrl($payment->getOrderId());
       }
-      return $this->buildReturnUrl($payment->getOrderId());
+
+      // Set transaction ID in session.
+      $this->tempStore->set('transaction_id', $transaction_id);
+
+      $this->logger->notice('Sending user to Nets. Order: @order_id.', ['@order_id' => $payment->getOrderId()]);
+
+      $options = [
+        'merchantid' => $merchant_id,
+        'transactionId' => $transaction_id,
+      ];
+
+      // Build the redirect URL.
+      $terminal_url = $this->nets->terminalUrl($payment_gateway_settings['mode']);
     }
 
-    // Set transaction ID in session.
-    $this->tempStore->set('transaction_id', $transaction_id);
-
-    $this->logger->notice('Sending user to Nets. Order: @order_id.', array('@order_id' => $payment->getOrderId()));
-    // Build the redirect URL.
-    $terminal_url = $this->nets->terminalUrl($payment_gateway_settings['mode']);
-    $merchant_id = $payment_gateway_settings['merchantid'];
-    $options = [
-      'merchantid' => $merchant_id,
-      'transactionId' => $transaction_id,
-    ];
     // Builds the redirect form.
-    return $this->buildRedirectForm($form, $form_state, $terminal_url, $options, self::REDIRECT_GET);
+    return $this->buildRedirectForm($form, $form_state, $terminal_url, $options, self::REDIRECT_POST);
   }
 
   /**

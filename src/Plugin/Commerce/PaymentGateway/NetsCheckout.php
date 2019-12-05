@@ -120,15 +120,16 @@ class NetsCheckout extends OffsitePaymentGatewayBase implements SupportsVoidsInt
    */
   public function defaultConfiguration() {
     return [
-      'merchantid' => '',
-      'netstoken' => '',
-      'language' => 'en_GB',
-      'order_description' => '',
-      'transaction_id' => '',
-      'use_redirect' => FALSE,
-      'recurring' => FALSE,
-      'override_list_builder' => TRUE,
-    ] + parent::defaultConfiguration();
+        'merchantid' => '',
+        'accountnumber' => '',
+        'netstoken' => '',
+        'language' => 'en_GB',
+        'order_description' => '',
+        'transaction_id' => '',
+        'use_redirect' => FALSE,
+        'recurring' => TRUE,
+        'override_list_builder' => TRUE,
+      ] + parent::defaultConfiguration();
   }
 
   /**
@@ -144,11 +145,25 @@ class NetsCheckout extends OffsitePaymentGatewayBase implements SupportsVoidsInt
       '#default_value' => $this->configuration['merchantid'],
       '#required' => TRUE,
     ];
+    $form['accountnumber'] = [
+      '#type' => 'textfield',
+      '#title' => t('Account number'),
+      '#description' => t('Account number issued by Nets.'),
+      '#default_value' => $this->configuration['accountnumber'],
+      '#required' => TRUE,
+    ];
     $form['netstoken'] = [
       '#type' => 'textfield',
       '#title' => t('Token'),
       '#description' => t('Nets token issued by Nets.'),
       '#default_value' => $this->configuration['netstoken'],
+      '#required' => TRUE,
+    ];
+    $form['companyname'] = [
+      '#type' => 'textfield',
+      '#title' => t('Company Name'),
+      '#description' => t('Name as registered in Nets.'),
+      '#default_value' => $this->configuration['companyname'],
       '#required' => TRUE,
     ];
     $form['language'] = [
@@ -192,51 +207,83 @@ class NetsCheckout extends OffsitePaymentGatewayBase implements SupportsVoidsInt
     if (!$form_state->getErrors()) {
       $values = $form_state->getValue($form['#parents']);
       $this->configuration['merchantid'] = $values['merchantid'];
+      $this->configuration['accountnumber'] = $values['accountnumber'];
       $this->configuration['netstoken'] = $values['netstoken'];
+      $this->configuration['companyname'] = $values['companyname'];
       $this->configuration['language'] = $values['language'];
       $this->configuration['order_description'] = $values['order_description'];
       $this->configuration['use_redirect'] = FALSE;
-      $this->configuration['recurring'] = FALSE;
+      $this->configuration['recurring'] = TRUE;
       $this->configuration['transaction_id'] = $values['advanced']['transaction_id'];
     }
   }
 
   /**
    * {@inheritdoc}
+   * @throws \Exception
    */
   public function onReturn(OrderInterface $order, Request $request) {
+    // Verify payment method
+    $payment_method = $order->get('field_payment_method')->value;
 
-    $remote_id = $request->get('transactionId');
-    $response_code = $request->get('responseCode');
+    $remote_id = $request->get('transactionId') ?? null;
+    $response_code = $request->get('responseCode') ?? $request->get('status');
     $capture = $request->get('capture');
 
-    // @todo: Check transaction ID mismatch.
-    if ($this->tempStore->get('transaction_id') !== $remote_id) {
-      throw new PaymentGatewayException(new FormattableMarkup('Mismatch between transaction ID in user session %session and transaction ID returned by NETS %nets.', ['%session' => $this->tempStore->get('transaction_id'), '%nets' => $remote_id]));
-    }
+    if($payment_method === 'avtale_giro_bank_id') {
+      $message_variables = [
+        '%oid' => $order->id(),
+        '%rc' => $response_code,
+      ];
 
-    $message_variables = array(
-      '%oid' => $order->id(),
-      '%tid' => $remote_id,
-      '%rc'  => $response_code,
-    );
+      if (empty($response_code)) {
+        throw new PaymentGatewayException(new FormattableMarkup('Return from Nets has wrong values for order: %oid and responseCode: %rc.', $message_variables));
+      }
 
-    if (empty($remote_id) || empty($response_code)) {
-      throw new PaymentGatewayException(new FormattableMarkup('Return from Nets has wrong values for order: %oid, transactionId: %tid and responseCode: %rc.', $message_variables));
-    }
+      if($response_code === 'cancel') {
+        $message_variables['reason'] = "Canceled";
+        $this->logger->error('There was a problem with payment for order %oid, reason: %reason', $message_variables);
+        throw new PaymentGatewayException('Error at payment gateway.');
+      } else if($response_code === 'error') {
+        $message_variables['reason'] = "Error";
+        $this->logger->error('There was a problem with payment for order %oid, reason: %reason', $message_variables);
+        throw new PaymentGatewayException('Error at payment gateway.');
+      }
 
-    // We cannot rely on data we receive from NETS as there is no authorization,
-    // checksum or hash. We will retrieve transaction status from NETS API.
-    $payment_settings = $this->configuration;
-    $nets_transaction = $this->nets->queryTransaction($payment_settings, $remote_id);
+      // We cannot rely on data we receive from NETS as there is no authorization,
+      // checksum or hash. We will retrieve transaction status from NETS API.
+      //$payment_settings = $this->configuration;
+      //$nets_transaction = $this->nets->queryTransactionInvoice($payment_settings);
 
-    if (isset($nets_transaction->ErrorLog)
-      && isset($nets_transaction->ErrorLog->PaymentError)
-      && isset($nets_transaction->ErrorLog->PaymentError->ResponseText)) {
+    } else {
+      // @todo: Check transaction ID mismatch.
+      if ($this->tempStore->get('transaction_id') !== $remote_id) {
+        throw new PaymentGatewayException(new FormattableMarkup('Mismatch between transaction ID in user session %session and transaction ID returned by NETS %nets.', ['%session' => $this->tempStore->get('transaction_id'), '%nets' => $remote_id]));
+      }
 
-      $message_variables['%reason'] = $nets_transaction->ErrorLog->PaymentError->ResponseText;
-      $this->logger->error('There was a problem with payment for order %oid, reason: %reason', $message_variables);
-      throw new PaymentGatewayException('Error at payment gateway.');
+      $message_variables = [
+        '%oid' => $order->id(),
+        '%tid' => $remote_id,
+        '%rc' => $response_code,
+      ];
+
+      if (empty($remote_id) || empty($response_code)) {
+        throw new PaymentGatewayException(new FormattableMarkup('Return from Nets has wrong values for order: %oid, transactionId: %tid and responseCode: %rc.', $message_variables));
+      }
+
+      // We cannot rely on data we receive from NETS as there is no authorization,
+      // checksum or hash. We will retrieve transaction status from NETS API.
+      $payment_settings = $this->configuration;
+      $nets_transaction = $this->nets->queryTransaction($payment_settings, $remote_id);
+
+      if (isset($nets_transaction->ErrorLog)
+        && isset($nets_transaction->ErrorLog->PaymentError)
+        && isset($nets_transaction->ErrorLog->PaymentError->ResponseText)) {
+
+        $message_variables['%reason'] = $nets_transaction->ErrorLog->PaymentError->ResponseText;
+        $this->logger->error('There was a problem with payment for order %oid, reason: %reason', $message_variables);
+        throw new PaymentGatewayException('Error at payment gateway.');
+      }
     }
 
     $action = $capture === '1' ? 'SALE' : 'AUTH';
@@ -252,13 +299,16 @@ class NetsCheckout extends OffsitePaymentGatewayBase implements SupportsVoidsInt
       // We set this one so payment which hasn't been save can read a balance.
       'refunded_amount' => new Price(0, $order->getTotalPrice()->getCurrencyCode()),
     ]);
-    try {
-      $this->nets->processTransaction($payment, $action);
+
+    if($payment_method !== 'avtale_giro_bank_id') {
+      try {
+        $this->nets->processTransaction($payment, $action);
+      } catch(\Exception $e) {
+        $this->tempStore->delete('transaction_id');
+        throw new PaymentGatewayException("Authorization failed.");
+      }
     }
-    catch (\Exception $e) {
-      $this->tempStore->delete('transaction_id');
-      throw new PaymentGatewayException("Authorization failed.");
-    }
+
     $payment->setState($action === 'SALE' ? 'completed' : 'authorization');
     $payment->setAuthorizedTime($this->time->getCurrentTime());
     $payment->save();
