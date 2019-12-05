@@ -1,0 +1,17 @@
+{
+  "name": "drupal/commerce_nets",
+  "type": "drupal-module",
+  "description": "Provides a payment gateway for Nets Payment Gateway",
+  "keywords": ["Drupal"],
+  "license": "GPL-2.0+",
+  "homepage": "https://www.drupal.org/project/commerce_nets",
+  "minimum-stability": "dev",
+  "support": {
+    "issues": "https://www.drupal.org/project/issues/commerce_nets",
+    "source": "http://cgit.drupalcode.org/commerce_nets"
+  },
+  "require": {
+    "ext-soap": "*",
+    "mobiledetect/mobiledetectlib": "^2.8"
+  }
+}

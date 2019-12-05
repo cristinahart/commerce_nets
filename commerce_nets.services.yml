@@ -1,0 +1,14 @@
+services:
+  commerce_nets.manager:
+    class: Drupal\commerce_nets\NetsManager
+    arguments: ['@commerce_nets.logger', '@token', '@event_dispatcher']
+
+  commerce_nets.logger:
+    class: Drupal\Core\Logger\LoggerChannel
+    factory: logger.factory:get
+    arguments: ['commerce_nets']
+
+  commerce_nets.tempstore:
+    class: \Drupal\Core\TempStore\PrivateTempStore
+    factory: tempstore.private:get
+    arguments: ['commerce_nets']
