@@ -27,7 +27,7 @@ class NetsManager implements NetsManagerInterface {
 
   // Invoice endpoints
   const ENDPOINT_AVTALE_GIRO_REGISTER_TEST = 'https://pvu-test.nets.no/pvutest/atgtest.do';
-  const ENDPOINT_AVTALE_GIRO_REGISTER_LIVE = 'https://epayment.nets.eu/Netaxept/Register.aspx';
+  const ENDPOINT_AVTALE_GIRO_REGISTER_LIVE = 'https://pvu.nets.no/pvu/pvu.do?';
 
   // Payments endpoints
   const TERMINAL_TEST_CREDIT_CARD         = 'https://test.epayment.nets.eu/Terminal/default.aspx';
