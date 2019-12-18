@@ -27,7 +27,7 @@ class NetsManager implements NetsManagerInterface {
 
   // Invoice endpoints
   const ENDPOINT_AVTALE_GIRO_REGISTER_TEST = 'https://pvu-test.nets.no/pvutest/atgtest.do';
-  const ENDPOINT_AVTALE_GIRO_REGISTER_LIVE = 'https://pvu.nets.no/pvu/pvu.do?';
+  const ENDPOINT_AVTALE_GIRO_REGISTER_LIVE = 'https://epayment.nets.eu/Netaxept/Register.aspx';
 
   // Payments endpoints
   const TERMINAL_TEST_CREDIT_CARD         = 'https://test.epayment.nets.eu/Terminal/default.aspx';
@@ -540,7 +540,7 @@ class NetsManager implements NetsManagerInterface {
    *
    * @return string kid with 20 numbers
    */
-  private function buildKidNumber($order_id) {
+  public function buildKidNumber($order_id) {
     // Order id is a 8 number length
     while(strlen($order_id) < 8) {
       $order_id = '0' . $order_id;

@@ -105,6 +105,8 @@ class NetsCheckoutForm extends BasePaymentOffsiteForm implements ContainerInject
         'account_number' => $account_number,
       ];
 
+      $order->setData('transactionId', $this->nets->buildKidNumber($order->id()));
+      $order->save();
     } else {
       try {
         // Create a local transaction for the register event.
@@ -134,6 +136,9 @@ class NetsCheckoutForm extends BasePaymentOffsiteForm implements ContainerInject
 
       // Build the redirect URL.
       $terminal_url = $this->nets->terminalUrl($payment_gateway_settings['mode']);
+      $order->setData('transactionId', $transaction_id);
+      $order->save();
+
     }
 
     // Builds the redirect form.
